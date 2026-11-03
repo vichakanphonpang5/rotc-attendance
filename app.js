@@ -128,7 +128,7 @@ async function api(action, payload) {
 function clearAuth() {
   S.token = null; S.user = null; S.users = null;
   LS.del('token'); LS.del('user');
-  if (!['dash', 'report'].includes(S.tab)) S.tab = 'dash';
+  S.tab = 'dash';
 }
 
 async function loadData(silent) {
@@ -189,8 +189,8 @@ function calcStats(type, from, to, year, list) {
   const studs = list || S.data.students.filter(s => !year || String(s.year) === String(year));
   const pass = passPct();
   let rows = studs.map(st => {
-    const c = { st, present: 0, sick: 0, personal: 0, absent: 0, total: 0 };
-    sess.forEach(s => { const v = s.records[st.id]; if (v && c[v] != null) { c[v]++; c.total++; } });
+    const c = { st, present: 0, sick: 0, personal: 0, absent: 0, total: 0, dressBad: 0 };
+    sess.forEach(s => { const v = s.records[st.id]; if (v && c[v] != null) { c[v]++; c.total++; } if (s.dress && s.dress[st.id] === 'bad') c.dressBad++; });
     c.pct = c.total ? c.present * 100 / c.total : null;
     c.pass = c.pct == null ? null : c.pct >= pass;
     return c;
@@ -205,18 +205,23 @@ function countOf(records) {
   Object.values(records || {}).forEach(v => { if (c[v] != null) c[v]++; });
   return c;
 }
-function chips(c) { return `<div class="cnts">${STK.map(k => `<span class="tag ${ST[k].c}">${ST[k].t} ${c[k] || 0}</span>`).join('')}</div>`; }
-function notPresentNames(records) {
+function chips(c, dress) {
+  const bad = Object.values(dress || {}).filter(v => v === 'bad').length;
+  return `<div class="cnts">${STK.map(k => `<span class="tag ${ST[k].c}">${ST[k].t} ${c[k] || 0}</span>`).join('')}${dress ? `<span class="tag dressbad">แต่งกายไม่เรียบร้อย ${bad}</span>` : ''}</div>`;
+}
+function notPresentNames(records, dress) {
   const byId = {}; S.data.students.forEach(s => byId[s.id] = s.name);
   const g = { sick: [], personal: [], absent: [] };
   Object.entries(records || {}).forEach(([id, v]) => { if (g[v]) g[v].push(byId[id] || '(ไม่พบชื่อ)'); });
   const parts = Object.entries(g).filter(([, a]) => a.length).map(([k, a]) => `<b>${ST[k].t}:</b> ${a.map(esc).join(', ')}`);
+  const bad = Object.entries(dress || {}).filter(([, v]) => v === 'bad').map(([id]) => byId[id] || '(ไม่พบชื่อ)');
+  if (bad.length) parts.push(`<b>แต่งกายไม่เรียบร้อย:</b> ${bad.map(esc).join(', ')}`);
   return parts.length ? `<div class="names">${parts.join('<br>')}</div>` : '';
 }
 
 /* ---------------- check state ---------------- */
 function initChk() {
-  S.chk = { type: 'class', date: isoDate(), period: nowHM() < '12:00' ? 'am' : 'pm', activity: '', rec: {}, dirty: false };
+  S.chk = { type: 'class', date: isoDate(), period: nowHM() < '12:00' ? 'am' : 'pm', activity: '', rec: {}, dress: {}, dirty: false };
   loadChk();
 }
 function loadChk() {
@@ -226,6 +231,8 @@ function loadChk() {
   const ex = S.data.sessions.find(s => s.id === id);
   const src = q ? q.payload : ex;
   c.rec = src ? Object.assign({}, src.records) : {};
+  c.dress = src ? Object.assign({}, src.dress || {}) : {};
+  Object.keys(c.rec).forEach(id => { if (c.rec[id] === 'present' && !c.dress[id]) c.dress[id] = 'ok'; });
   c.activity = src ? (src.activity || '') : '';
   c.dirty = false;
 }
@@ -239,8 +246,9 @@ async function saveChk() {
   const missing = studs.filter(s => !c.rec[s.id]).length;
   if (missing) return toast('ยังเช็คไม่ครบอีก ' + missing + ' คน', 'bad');
   if (c.type === 'activity' && !c.activity.trim()) return toast('กรุณาใส่ชื่อกิจกรรม', 'bad');
-  const records = {}; studs.forEach(s => records[s.id] = c.rec[s.id]);
-  const payload = { date: c.date, type: c.type, period: c.period, activity: c.activity.trim(), records, recordedAt: Date.now() };
+  const records = {}, dress = {};
+  studs.forEach(s => { records[s.id] = c.rec[s.id]; if (c.rec[s.id] === 'present') dress[s.id] = c.dress[s.id] === 'bad' ? 'bad' : 'ok'; });
+  const payload = { date: c.date, type: c.type, period: c.period, activity: c.activity.trim(), records, dress, recordedAt: Date.now() };
   const label = TYPE[c.type] + ' ' + thDate(c.date) + ' ' + PERIOD[c.period];
   await busy(async () => {
     try {
@@ -304,7 +312,7 @@ function availableTabs() {
     { id: 'dash', t: 'ภาพรวม' },
     { id: 'check', t: 'เช็คชื่อ', roles: ['leader', 'supervisor'] },
     { id: 'approve', t: 'อนุมัติ', roles: ['supervisor'] },
-    { id: 'report', t: 'รายงาน' },
+    { id: 'report', t: 'รายงาน', roles: ['viewer', 'leader', 'supervisor'] },
     { id: 'manage', t: 'จัดการ', roles: ['supervisor'] }
   ].filter(t => !t.roles || t.roles.includes(r));
 }
@@ -371,7 +379,7 @@ function viewDash() {
 
   if (latest) {
     h += `<div class="card"><div class="card-h">ล่าสุด <small>${thDate(latest.date, true)} · รอบ${PERIOD[latest.period]}${latest.activity ? ' · ' + esc(latest.activity) : ''}</small></div>
-      ${chips(countOf(latest.records))}${notPresentNames(latest.records)}</div>`;
+      ${chips(countOf(latest.records), latest.dress || {})}${notPresentNames(latest.records, latest.dress)}</div>`;
   }
 
   h += `<div class="card"><div class="card-h">รายชื่อ <small>เกณฑ์ผ่าน ${pass}% · แตะเพื่อดูประวัติ</small></div>`;
@@ -380,7 +388,7 @@ function viewDash() {
     h += `<div class="slist">` + rows.map(r => {
       const cls = r.pct == null ? 'na' : r.pass ? 'ok' : 'bad';
       return `<button class="srow-d" data-act="student" data-id="${esc(r.st.id)}">
-        <div class="nm"><b>${esc(r.st.name)}</b><small>ชั้นปี ${esc(r.st.year)} · มา ${r.present} · ลาป่วย ${r.sick} · ลากิจ ${r.personal} · ขาด ${r.absent}</small>
+        <div class="nm"><b>${esc(r.st.name)}</b><small>ชั้นปี ${esc(r.st.year)} · มา ${r.present} · ลาป่วย ${r.sick} · ลากิจ ${r.personal} · ขาด ${r.absent}${r.dressBad ? ` · <span class="dbad">แต่งกายไม่เรียบร้อย ${r.dressBad}</span>` : ''}</small>
           <div class="bar"><i class="${r.pass === false ? 'bad' : ''}" style="width:${r.pct || 0}%"></i><span class="mk" style="left:${pass}%"></span></div></div>
         <div class="pc ${cls}">${pctTxt(r.pct)}</div></button>`;
     }).join('') + `</div>`;
@@ -428,14 +436,14 @@ function viewCheck() {
     let lastY = null;
     studs.forEach((s, i) => {
       if (String(s.year) !== lastY) { lastY = String(s.year); h += `<div class="ygroup">ชั้นปี ${esc(s.year)}</div>`; }
-      h += srow(s, i + 1, c.rec, locked, 'mark');
+      h += srow(s, i + 1, c.rec, locked, 'mark', c.dress, 'dress');
     });
     h += `</div>`;
     if (r === 'supervisor' && ex) h += `<button class="btn ghost danger full" data-act="delSess" data-id="${esc(ex.id)}">ลบรายการเช็คชื่อนี้</button><div style="height:12px"></div>`;
 
     const cnt = countOf(c.rec), done = studs.filter(s => c.rec[s.id]).length;
     h += `<div class="savebar"><div class="in">
-      <div class="cnts">${STK.map(k => `<span class="tag ${ST[k].c}">${ST[k].t} ${cnt[k]}</span>`).join('')}<span class="muted">${done}/${studs.length}</span></div>
+      <div class="cnts">${STK.map(k => `<span class="tag ${ST[k].c}">${ST[k].t} ${cnt[k]}</span>`).join('')}<span class="tag dressbad">ไม่เรียบร้อย ${studs.filter(s => c.rec[s.id] === 'present' && c.dress[s.id] === 'bad').length}</span><span class="muted">${done}/${studs.length}</span></div>
       <button class="btn full ${r === 'supervisor' ? 'ok' : ''}" data-act="saveChk"${locked || outWin ? ' disabled' : ''}>${r === 'supervisor' ? 'บันทึก (อนุมัติทันที)' : 'บันทึกและส่งให้ผู้กำกับอนุมัติ'}</button>
     </div></div>`;
   }
@@ -448,10 +456,11 @@ function viewCheck() {
   return h;
 }
 
-function srow(s, i, rec, locked, act) {
-  const v = rec[s.id];
+function srow(s, i, rec, locked, act, dress, dact) {
+  const v = rec[s.id], d = (dress || {})[s.id] || 'ok';
   return `<div class="srow ${v ? 'st-' + v : 'unset'}"><div class="sname"><span class="no">${i}</span>${esc(s.name)}</div>
-    <div class="sbtns">${STK.map(k => `<button class="sb ${k}${v === k ? ' on' : ''}" data-act="${act}" data-id="${esc(s.id)}" data-st="${k}"${locked ? ' disabled' : ''}>${ST[k].t}</button>`).join('')}</div></div>`;
+    <div class="sbtns">${STK.map(k => `<button class="sb ${k}${v === k ? ' on' : ''}" data-act="${act}" data-id="${esc(s.id)}" data-st="${k}"${locked ? ' disabled' : ''}>${ST[k].t}</button>`).join('')}</div>
+    ${v === 'present' && dress ? `<div class="dress"><span>การแต่งกาย</span>${[['ok', 'เรียบร้อย'], ['bad', 'ไม่เรียบร้อย']].map(([k, t]) => `<button class="db ${k}${d === k ? ' on' : ''}" data-act="${dact}" data-id="${esc(s.id)}" data-v="${k}"${locked ? ' disabled' : ''}>${t}</button>`).join('')}</div>` : ''}</div>`;
 }
 
 /* ---------- Approve ---------- */
@@ -463,7 +472,7 @@ function viewApprove() {
       <div class="sess-h"><span class="tag ${s.type}">${TYPE[s.type]}</span><b>${thDate(s.date, true)}</b> · รอบ${PERIOD[s.period]}</div>
       ${s.activity ? `<div class="muted">กิจกรรม: ${esc(s.activity)}</div>` : ''}
       <div class="muted">เช็คโดย ${esc(s.createdBy)} · ${esc(s.createdAt)}</div>
-      ${chips(countOf(s.records))}${notPresentNames(s.records)}
+      ${chips(countOf(s.records), s.dress || {})}${notPresentNames(s.records, s.dress)}
       <div class="btns">
         <button class="btn ghost" data-act="apvOpen" data-id="${esc(s.id)}">ตรวจ/แก้ไข</button>
         <button class="btn ghost danger" data-act="reject" data-id="${esc(s.id)}">ส่งกลับ</button>
@@ -515,8 +524,8 @@ function repSemester(types, year) {
     const { sess, rows } = calcStats(t, rng.from, rng.to, year);
     const ok = rows.filter(x => x.pass === true).length, ng = rows.filter(x => x.pass === false).length;
     h += `<div class="r-sec">${TYPE[t]} (เช็คทั้งหมด ${sess.length} ครั้ง)</div>
-    <table><thead><tr><th>ที่</th><th>ชื่อ-สกุล</th><th>ชั้นปี</th><th>ครั้งที่เช็ค</th><th>มา</th><th>ลาป่วย</th><th>ลากิจ</th><th>ขาด</th><th>ร้อยละ</th><th>ผล</th></tr></thead><tbody>
-    ${rows.map((x, i) => `<tr><td>${i + 1}</td><td class="l">${esc(x.st.name)}</td><td>${esc(x.st.year)}</td><td>${x.total}</td><td>${x.present}</td><td>${x.sick}</td><td>${x.personal}</td><td>${x.absent}</td><td>${pctTxt(x.pct)}</td>${resultCell(x)}</tr>`).join('') || '<tr><td colspan="10">ไม่มีข้อมูล</td></tr>'}
+    <table><thead><tr><th>ที่</th><th>ชื่อ-สกุล</th><th>ชั้นปี</th><th>ครั้งที่เช็ค</th><th>มา</th><th>ลาป่วย</th><th>ลากิจ</th><th>ขาด</th><th>แต่งกาย<br>ไม่เรียบร้อย</th><th>ร้อยละ</th><th>ผล</th></tr></thead><tbody>
+    ${rows.map((x, i) => `<tr><td>${i + 1}</td><td class="l">${esc(x.st.name)}</td><td>${esc(x.st.year)}</td><td>${x.total}</td><td>${x.present}</td><td>${x.sick}</td><td>${x.personal}</td><td>${x.absent}</td><td>${x.dressBad}</td><td>${pctTxt(x.pct)}</td>${resultCell(x)}</tr>`).join('') || '<tr><td colspan="11">ไม่มีข้อมูล</td></tr>'}
     </tbody></table>
     <p class="r-note">ผ่านเกณฑ์ ${ok} คน · ไม่ผ่านเกณฑ์ ${ng} คน (เกณฑ์ร้อยละ ${passPct()})</p>`;
   });
@@ -536,13 +545,13 @@ function repMonth(ym, types, year) {
     h += `<table class="mx"><thead>
       <tr><th rowspan="2">ที่</th><th rowspan="2">ชื่อ-สกุล</th><th rowspan="2">ปี</th>
         ${dates.map(d => `<th colspan="${d.n}">${Number(d.date.slice(8))}</th>`).join('')}
-        <th rowspan="2">มา</th><th rowspan="2">ป</th><th rowspan="2">ก</th><th rowspan="2">ข</th><th rowspan="2">ร้อยละ</th></tr>
+        <th rowspan="2">มา</th><th rowspan="2">ป</th><th rowspan="2">ก</th><th rowspan="2">ข</th><th rowspan="2">แต่งกาย<br>ไม่เรียบร้อย</th><th rowspan="2">ร้อยละ</th></tr>
       <tr>${sess.map(s => `<th>${s.period === 'am' ? 'ช' : 'ย'}</th>`).join('')}</tr></thead><tbody>
       ${rows.map((x, i) => `<tr><td>${i + 1}</td><td class="l">${esc(x.st.name)}</td><td>${esc(x.st.year)}</td>
-        ${sess.map(s => { const v = s.records[x.st.id]; return `<td class="c${v ? ' s-' + v : ''}">${v ? ST[v].s : '-'}</td>`; }).join('')}
-        <td>${x.present}</td><td>${x.sick}</td><td>${x.personal}</td><td>${x.absent}</td><td class="${x.pass === false ? 'fail' : ''}">${pctTxt(x.pct)}</td></tr>`).join('')}
+        ${sess.map(s => { const v = s.records[x.st.id]; const bad = s.dress && s.dress[x.st.id] === 'bad'; return `<td class="c${v ? ' s-' + v : ''}${bad ? ' s-dress' : ''}">${v ? ST[v].s + (bad ? '*' : '') : '-'}</td>`; }).join('')}
+        <td>${x.present}</td><td>${x.sick}</td><td>${x.personal}</td><td>${x.absent}</td><td>${x.dressBad}</td><td class="${x.pass === false ? 'fail' : ''}">${pctTxt(x.pct)}</td></tr>`).join('')}
       </tbody></table>
-      <p class="r-note">สัญลักษณ์: ✓ = มา, ป = ลาป่วย, ก = ลากิจ, ข = ขาด, - = ไม่มีรายชื่อในครั้งนั้น · ช = รอบเช้า, ย = รอบเย็น</p>`;
+      <p class="r-note">สัญลักษณ์: ✓ = มา, ✓* = มาแต่แต่งกายไม่เรียบร้อย, ป = ลาป่วย, ก = ลากิจ, ข = ขาด, - = ไม่มีรายชื่อในครั้งนั้น · ช = รอบเช้า, ย = รอบเย็น</p>`;
     if (t === 'activity') {
       h += `<p class="r-note">กิจกรรม: ${sess.map(s => `${thDate(s.date)} (${PERIOD[s.period]}) ${esc(s.activity)}`).join(' · ')}</p>`;
     }
@@ -557,15 +566,15 @@ function repIndividual(id, types) {
   let h = repHead('รายงาน' + typeTitle(types) + ' รายบุคคล นักศึกษาวิชาทหาร',
     `${esc(setting('semester_name'))} (${thDate(rng.from, true)} – ${thDate(rng.to, true)})`);
   h += `<table class="r-info"><tr><td>ชื่อ-สกุล</td><td><b>${esc(st.name)}</b></td><td style="padding-left:30px">ชั้นปีที่</td><td><b>${esc(st.year)}</b></td></tr></table>`;
-  h += `<div class="r-sec">สรุป</div><table><thead><tr><th>ประเภท</th><th>ครั้งที่เช็ค</th><th>มา</th><th>ลาป่วย</th><th>ลากิจ</th><th>ขาด</th><th>ร้อยละ</th><th>ผล</th></tr></thead><tbody>`;
+  h += `<div class="r-sec">สรุป</div><table><thead><tr><th>ประเภท</th><th>ครั้งที่เช็ค</th><th>มา</th><th>ลาป่วย</th><th>ลากิจ</th><th>ขาด</th><th>แต่งกายไม่เรียบร้อย</th><th>ร้อยละ</th><th>ผล</th></tr></thead><tbody>`;
   types.forEach(t => {
     const x = calcStats(t, rng.from, rng.to, '', [st]).rows[0];
-    h += `<tr><td>${TYPE[t]}</td><td>${x.total}</td><td>${x.present}</td><td>${x.sick}</td><td>${x.personal}</td><td>${x.absent}</td><td>${pctTxt(x.pct)}</td>${resultCell(x)}</tr>`;
+    h += `<tr><td>${TYPE[t]}</td><td>${x.total}</td><td>${x.present}</td><td>${x.sick}</td><td>${x.personal}</td><td>${x.absent}</td><td>${x.dressBad}</td><td>${pctTxt(x.pct)}</td>${resultCell(x)}</tr>`;
   });
   h += `</tbody></table>`;
   const sess = calcStats(types.length > 1 ? 'both' : types[0], rng.from, rng.to, '', [st]).sess.filter(s => s.records[st.id]);
-  h += `<div class="r-sec">รายละเอียด</div><table><thead><tr><th>ที่</th><th>วันที่</th><th>รอบ</th><th>ประเภท</th><th>กิจกรรม</th><th>สถานะ</th></tr></thead><tbody>
-    ${sess.map((s, i) => { const v = s.records[st.id]; return `<tr><td>${i + 1}</td><td>${thDate(s.date, true)}</td><td>${PERIOD[s.period]}</td><td>${TYPE[s.type]}</td><td class="l">${esc(s.activity || '-')}</td><td class="${v === 'absent' ? 'fail' : ''}">${ST[v].t}</td></tr>`; }).join('') || '<tr><td colspan="6">ไม่มีข้อมูล</td></tr>'}
+  h += `<div class="r-sec">รายละเอียด</div><table><thead><tr><th>ที่</th><th>วันที่</th><th>รอบ</th><th>ประเภท</th><th>กิจกรรม</th><th>สถานะ</th><th>การแต่งกาย</th></tr></thead><tbody>
+    ${sess.map((s, i) => { const v = s.records[st.id]; const d = s.dress && s.dress[st.id]; return `<tr><td>${i + 1}</td><td>${thDate(s.date, true)}</td><td>${PERIOD[s.period]}</td><td>${TYPE[s.type]}</td><td class="l">${esc(s.activity || '-')}</td><td class="${v === 'absent' ? 'fail' : ''}">${ST[v].t}</td><td class="${d === 'bad' ? 'fail' : ''}">${d === 'bad' ? 'ไม่เรียบร้อย' : d === 'ok' ? 'เรียบร้อย' : '-'}</td></tr>`; }).join('') || '<tr><td colspan="7">ไม่มีข้อมูล</td></tr>'}
   </tbody></table>`;
   return h + repSign();
 }
@@ -640,7 +649,7 @@ function modalHTML() {
     if (!s) { S.modal = null; return ''; }
     const studs = S.data.students.filter(st => st.active || m.rec[st.id]).sort(sortStudents);
     b = `${x}<h3>ตรวจรายการ</h3><p class="muted">${TYPE[s.type]} · ${thDate(s.date, true)} · รอบ${PERIOD[s.period]}${s.activity ? ' · ' + esc(s.activity) : ''}<br>เช็คโดย ${esc(s.createdBy)}</p>
-      ${chips(countOf(m.rec))}<div style="margin-top:8px">${studs.map((st, i) => srow(st, i + 1, m.rec, false, 'amark')).join('')}</div>
+      ${chips(countOf(m.rec), m.dress)}<div style="margin-top:8px">${studs.map((st, i) => srow(st, i + 1, m.rec, false, 'amark', m.dress, 'adress')).join('')}</div>
       <div class="btns"><button class="btn ghost danger" data-act="reject" data-id="${esc(s.id)}">ส่งกลับ</button><button class="btn ok" data-act="apvSave">อนุมัติ</button></div>`;
   } else if (m.kind === 'stEdit') {
     const s = S.data.students.find(z => z.id === m.id) || { id: '', name: '', year: '1', active: true };
@@ -672,13 +681,13 @@ function modalStudent(id) {
   const minis = ['class', 'activity'].map(t => {
     const r = calcStats(t, rng.from, rng.to, '', [st]).rows[0];
     return `<div class="mini"><small>${TYPE[t]}</small><div class="big ${r.pass == null ? '' : r.pass ? 'ok' : 'bad'}">${pctTxt(r.pct)}</div>
-      <small>มา ${r.present} · ลาป่วย ${r.sick} · ลากิจ ${r.personal} · ขาด ${r.absent}</small></div>`;
+      <small>มา ${r.present} · ลาป่วย ${r.sick} · ลากิจ ${r.personal} · ขาด ${r.absent}${r.dressBad ? ` · แต่งกายไม่เรียบร้อย ${r.dressBad}` : ''}</small></div>`;
   }).join('');
   const hist = calcStats('both', rng.from, rng.to, '', [st]).sess.filter(s => s.records[st.id]).sort(sessSort);
   return `<h3>${esc(st.name)}</h3><p class="muted">ชั้นปี ${esc(st.year)} · ${esc(setting('semester_name'))}</p>
     <div class="minis">${minis}</div>
-    <table class="hist">${hist.map(s => { const v = s.records[st.id]; return `<tr><td>${thDate(s.date)}</td><td>${PERIOD[s.period]}</td><td>${TYPE[s.type]}${s.activity ? '<br><small class="muted">' + esc(s.activity) + '</small>' : ''}</td><td style="text-align:right"><span class="tag ${ST[v].c}">${ST[v].t}</span></td></tr>`; }).join('') || '<tr><td class="muted">ยังไม่มีประวัติในภาคเรียนนี้</td></tr>'}</table>
-    <div class="btns"><button class="btn gold" data-act="printStudent" data-id="${esc(st.id)}">พิมพ์รายงานรายบุคคล (PDF)</button></div>`;
+    <table class="hist">${hist.map(s => { const v = s.records[st.id]; return `<tr><td>${thDate(s.date)}</td><td>${PERIOD[s.period]}</td><td>${TYPE[s.type]}${s.activity ? '<br><small class="muted">' + esc(s.activity) + '</small>' : ''}</td><td style="text-align:right"><span class="tag ${ST[v].c}">${ST[v].t}</span>${s.dress && s.dress[st.id] === 'bad' ? '<br><span class="tag dressbad">แต่งกายไม่เรียบร้อย</span>' : ''}</td></tr>`; }).join('') || '<tr><td class="muted">ยังไม่มีประวัติในภาคเรียนนี้</td></tr>'}</table>
+    ${role() ? `<div class="btns"><button class="btn gold" data-act="printStudent" data-id="${esc(st.id)}">พิมพ์รายงานรายบุคคล (PDF)</button></div>` : ''}`;
 }
 
 /* =====================================================================
@@ -708,9 +717,10 @@ const ACT = {
   printStudent: el => { Object.assign(S.rep, { kind: 'individual', student: el.dataset.id, type: 'both' }); S.modal = null; S.tab = 'report'; render(); doPrint(); },
   print: () => doPrint(),
 
-  mark: el => { S.chk.rec[el.dataset.id] = el.dataset.st; S.chk.dirty = true; render(); },
-  allPresent: () => { activeStudents().forEach(s => S.chk.rec[s.id] = 'present'); S.chk.dirty = true; render(); },
-  clearChk: () => { S.chk.rec = {}; S.chk.dirty = true; render(); },
+  mark: el => { const id = el.dataset.id, st = el.dataset.st; S.chk.rec[id] = st; if (st === 'present') { if (!S.chk.dress[id]) S.chk.dress[id] = 'ok'; } else delete S.chk.dress[id]; S.chk.dirty = true; render(); },
+  dress: el => { S.chk.dress[el.dataset.id] = el.dataset.v; S.chk.dirty = true; render(); },
+  allPresent: () => { activeStudents().forEach(s => { S.chk.rec[s.id] = 'present'; if (!S.chk.dress[s.id]) S.chk.dress[s.id] = 'ok'; }); S.chk.dirty = true; render(); },
+  clearChk: () => { S.chk.rec = {}; S.chk.dress = {}; S.chk.dirty = true; render(); },
   saveChk: () => saveChk(),
   openSess: el => {
     const s = S.data.sessions.find(x => x.id === el.dataset.id);
@@ -734,9 +744,15 @@ const ACT = {
     if (note === null) return;
     return busy(async () => { await api('rejectSession', { id: el.dataset.id, note }); S.modal = null; toast('ส่งกลับแล้ว'); await loadData(true); });
   },
-  apvOpen: el => { const s = S.data.sessions.find(x => x.id === el.dataset.id); if (!s) return; S.modal = { kind: 'apv', id: s.id, rec: Object.assign({}, s.records) }; render(); },
-  amark: el => { S.modal.rec[el.dataset.id] = el.dataset.st; render(); },
-  apvSave: () => busy(async () => { await api('approveSession', { id: S.modal.id, records: S.modal.rec }); S.modal = null; toast('อนุมัติแล้ว', 'ok'); await loadData(true); }),
+  apvOpen: el => {
+    const s = S.data.sessions.find(x => x.id === el.dataset.id); if (!s) return;
+    const dress = Object.assign({}, s.dress || {});
+    Object.keys(s.records).forEach(id => { if (s.records[id] === 'present' && !dress[id]) dress[id] = 'ok'; });
+    S.modal = { kind: 'apv', id: s.id, rec: Object.assign({}, s.records), dress }; render();
+  },
+  amark: el => { const id = el.dataset.id, st = el.dataset.st; S.modal.rec[id] = st; if (st === 'present') { if (!S.modal.dress[id]) S.modal.dress[id] = 'ok'; } else delete S.modal.dress[id]; render(); },
+  adress: el => { S.modal.dress[el.dataset.id] = el.dataset.v; render(); },
+  apvSave: () => busy(async () => { await api('approveSession', { id: S.modal.id, records: S.modal.rec, dress: S.modal.dress }); S.modal = null; toast('อนุมัติแล้ว', 'ok'); await loadData(true); }),
 
   stEdit: el => { S.modal = { kind: 'stEdit', id: el.dataset.id || '' }; render(); },
   stDel: el => {

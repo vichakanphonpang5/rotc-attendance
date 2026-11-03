@@ -148,6 +148,15 @@ form > * + * { margin-top: 10px; }
 .sb.sick.on { background: var(--warn); border-color: var(--warn); color: #fff; }
 .sb.personal.on { background: var(--info); border-color: var(--info); color: #fff; }
 .sb.absent.on { background: var(--bad); border-color: var(--bad); color: #fff; }
+.dress { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 13px; color: var(--mut); }
+.dress span { flex: none; width: 70px; }
+.db { flex: 1; border: 1.5px solid var(--line); background: #fff; border-radius: 9px; padding: 5px 2px; font-size: 13px; font-weight: 600; color: var(--mut); cursor: pointer; }
+.db.ok.on { background: var(--ok-l); border-color: var(--ok); color: var(--ok); }
+.db.bad.on { background: var(--bad); border-color: var(--bad); color: #fff; }
+.db:disabled { cursor: not-allowed; opacity: .7; }
+.tag.dressbad { background: #f3e5f5; color: #7b1fa2; }
+.dbad { color: #7b1fa2; font-weight: 600; }
+.rp table.mx td.s-dress { color: #7b1fa2; font-weight: 700; }
 .sb:disabled { cursor: not-allowed; opacity: .7; }
 .toolbar { display: flex; gap: 8px; margin-bottom: 8px; }
 .toolbar .btn { flex: 1; }

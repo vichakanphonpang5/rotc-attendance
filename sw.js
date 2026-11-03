@@ -1,5 +1,5 @@
 // Service Worker — เปลี่ยนเลขเวอร์ชันทุกครั้งที่อัปเดตไฟล์หน้าเว็บ
-const CACHE = 'rotc-v1';
+const CACHE = 'rotc-v2';
 const ASSETS = [
   './', './index.html', './style.css', './app.js', './config.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png'
