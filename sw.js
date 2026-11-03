@@ -1,12 +1,12 @@
-// Service Worker — เปลี่ยนเลขเวอร์ชันทุกครั้งที่อัปเดตไฟล์หน้าเว็บ
-const CACHE = 'rotc-v2';
+// Service Worker — ใช้ไฟล์ล่าสุดจากเน็ตก่อนเสมอ (ออฟไลน์จึงใช้ไฟล์ที่เก็บไว้)
+const CACHE = 'rotc-v3';
 const ASSETS = [
   './', './index.html', './style.css', './app.js', './config.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png'
 ];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS.map(u => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', e => {
@@ -37,12 +37,16 @@ self.addEventListener('fetch', e => {
     return;
   }
 
-  // ไฟล์ของแอป: ใช้ cache ทันที แล้วอัปเดตเบื้องหลัง
+  // ไฟล์ของแอป: โหลดจากเน็ตก่อน ถ้าออฟไลน์ใช้ที่เก็บไว้
   if (url.origin === self.location.origin) {
     e.respondWith(caches.open(CACHE).then(async c => {
-      const hit = await c.match(req, { ignoreSearch: true });
-      const net = fetch(req).then(res => { if (res.ok) c.put(req, res.clone()); return res; }).catch(() => hit);
-      return hit || net;
+      try {
+        const res = await fetch(req, { cache: 'no-cache' });
+        if (res.ok) c.put(req, res.clone());
+        return res;
+      } catch (err) {
+        return (await c.match(req, { ignoreSearch: true })) || (await c.match('./index.html'));
+      }
     }));
   }
 });
